@@ -1,23 +1,30 @@
 """매일 실행: KIS API(또는 MOCK=1 가짜데이터)로 일봉 수집 -> 주봉 변환 -> Stage 판별 -> site/ 에 JSON 생성"""
 import os, json, csv, time, random, datetime as dt
+import threading, concurrent.futures as cf
 import pandas as pd, requests
 
 BASE = "https://openapi.koreainvestment.com:9443"
 MOCK = os.environ.get("MOCK") == "1"
 OUT = "site"; os.makedirs(f"{OUT}/d", exist_ok=True)
 END = dt.date.today()
-START = END - dt.timedelta(days=1000)
+START = END - dt.timedelta(days=750)
 
 # ---------- KIS ----------
 class KIS:
     def __init__(self):
+        self.lk, self.last = threading.Lock(), 0.0
         self.key, self.sec = os.environ["KIS_APP_KEY"], os.environ["KIS_APP_SECRET"]
         r = requests.post(f"{BASE}/oauth2/tokenP", json={"grant_type": "client_credentials", "appkey": self.key, "appsecret": self.sec}, timeout=20)
         r.raise_for_status(); self.tok = r.json()["access_token"]
+    def wait(self):
+        with self.lk:
+            d = self.last + 0.055 - time.time()
+            if d > 0: time.sleep(d)
+            self.last = time.time()
     def get(self, path, tr, params):
         h = {"authorization": f"Bearer {self.tok}", "appkey": self.key, "appsecret": self.sec, "tr_id": tr, "custtype": "P"}
         for _ in range(3):
-            time.sleep(0.08)
+            self.wait()
             r = requests.get(BASE + path, headers=h, params=params, timeout=20)
             if r.status_code == 200 and r.json().get("rt_cd") == "0": return r.json()
             time.sleep(1)
@@ -91,24 +98,33 @@ def candles(df, n):
 
 def main():
     items = list(csv.DictReader(open("universe.csv", encoding="utf-8")))
+    if os.path.exists("stocks.csv"):
+        items = [i for i in items if i["kind"] != "stock"] + list(csv.DictReader(open("stocks.csv", encoding="utf-8")))
+    items = [i for i in items if not (i["kind"] == "stock" and i["mcap_b"] and float(i["mcap_b"]) < 1)]
     k = None if MOCK else KIS()
     data, errors = {}, []
-    for it in items:
-        try:
-            if it["kind"] == "stock" and it["mcap_b"] and float(it["mcap_b"]) < 1: continue
-            data[it["id"]] = mock(it) if MOCK else fetch_kis(k, it)
-        except Exception as e: errors.append(f'{it["id"]}: {e}')
+    def job(it):
+        try: return it["id"], (mock(it) if MOCK else fetch_kis(k, it)), None
+        except Exception as e: return it["id"], None, f'{it["id"]}: {e}'
+    with cf.ThreadPoolExecutor(8) as ex:
+        for i, df, err in ex.map(job, items):
+            if err: errors.append(err)
+            else: data[i] = df
     bench = {it["market"]: weekly(data[it["id"]]) for it in items if it["kind"] == "index" and it["id"] in data}
-    res = []
+    res, sec = [], {}
     for it in items:
         if it["id"] not in data: continue
         df = data[it["id"]]; w = weekly(df)
-        r = classify(w, None if it["kind"] == "commodity" or it["kind"] == "index" else bench.get(it["market"]))
+        r = classify(w, None if it["kind"] != "stock" else bench.get(it["market"]))
         if not r: continue
+        if it["kind"] == "stock":
+            a = sec.setdefault(it["market"] + "|" + (it["sector"] or "기타"), [0, 0, 0]); a[0] += 1; a[1] += r["stage"] == 2; a[2] += r["early"]
+            if r["stage"] != 2: continue
         res.append({"id": it["id"], "name": it["name"], "kind": it["kind"], "market": it["market"], "sector": it["sector"], **r})
-        json.dump({"d": candles(df, 260), "w": candles(w.reset_index(), 150)}, open(f'{OUT}/d/{it["id"]}.json', "w"))
-    json.dump({"updated": dt.datetime.now(dt.timezone(dt.timedelta(hours=9))).strftime("%Y-%m-%d %H:%M KST"), "mock": MOCK, "items": res, "errors": errors}, open(f"{OUT}/data.json", "w"), ensure_ascii=False)
-    print(f"완료: {len(res)}개, 오류 {len(errors)}개")
-    for e in errors: print(" -", e)
+        json.dump({"d": candles(df, 200), "w": candles(w.reset_index(), 104)}, open(f'{OUT}/d/{it["id"]}.json', "w"))
+    sectors = [{"k": k_, "n": v[0], "s2": v[1], "e": v[2]} for k_, v in sec.items() if v[0] >= 3]
+    json.dump({"updated": dt.datetime.now(dt.timezone(dt.timedelta(hours=9))).strftime("%Y-%m-%d %H:%M KST"), "mock": MOCK, "total": len(data), "items": res, "sectors": sectors, "errors": errors[:60]}, open(f"{OUT}/data.json", "w"), ensure_ascii=False)
+    print(f"완료: 수집 {len(data)}개, 표시 {len(res)}개, 오류 {len(errors)}개")
+    for e in errors[:40]: print(" -", e)
 
 if __name__ == "__main__": main()
