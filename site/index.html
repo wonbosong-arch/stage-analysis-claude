@@ -20,15 +20,14 @@ th:first-child,td:first-child{text-align:left}tr.r{cursor:pointer}tr.r:hover{bac
 let D,tab="idx",early=false,mk="";const $=i=>document.getElementById(i);
 const SN={1:"Stage 1",2:"Stage 2",3:"Stage 3",4:"Stage 4"};
 const badge=r=>`<span class="s s${r.stage}">${SN[r.stage]}</span>${r.early?' <span class="e">★초기</span>':''}`;
-fetch("data.json").then(r=>r.json()).then(d=>{D=d;$("up").textContent="갱신: "+d.updated+(d.mock?" · 테스트(가짜) 데이터":"");render()});
+fetch("data.json").then(r=>r.json()).then(d=>{D=d;$("up").textContent="갱신: "+d.updated+" · 분석 "+d.total+"개 · ③탭은 Stage 2 종목만 표시"+(d.mock?" · 테스트(가짜) 데이터":"");render()});
 function render(){
  $("tabs").innerHTML=[["idx","① 국가지수·원자재"],["sec","② 업종"],["stk","③ 종목"]].map(([k,n])=>`<button class="${tab==k?"on":""}" onclick="tab='${k}';render()">${n}</button>`).join("");
- const mks=[...new Set(D.items.filter(i=>i.kind=="stock").map(i=>i.market))];
+ const mks=[...new Set(D.sectors.map(i=>i.k.split("|")[0]))];
  $("fl").innerHTML=`<label><input type="checkbox" ${early?"checked":""} onchange="early=this.checked;render()"> Stage 2 초기만</label>`+(tab!="idx"?`<select onchange="mk=this.value;render()"><option value="">전체 시장</option>${mks.map(m=>`<option ${m==mk?"selected":""}>${m}</option>`).join("")}</select>`:"");
  let h="";
  if(tab=="sec"){
-  const g={};D.items.filter(i=>i.kind=="stock"&&(!mk||i.market==mk)).forEach(i=>{const k=i.market+"|"+i.sector;(g[k]=g[k]||[]).push(i)});
-  const rows=Object.entries(g).map(([k,a])=>({k,n:a.length,s2:a.filter(x=>x.stage==2).length,e:a.filter(x=>x.early).length})).sort((a,b)=>b.s2/b.n-a.s2/a.n);
+  const rows=D.sectors.filter(r=>!mk||r.k.split("|")[0]==mk).sort((a,b)=>b.s2/b.n-a.s2/a.n);
   h="<tr><th>시장 · 업종<th>종목수<th>Stage2 비중<th>초기 종목</tr>"+rows.filter(r=>!early||r.e).map(r=>`<tr><td>${r.k.replace("|"," · ")}<td>${r.n}<td>${Math.round(100*r.s2/r.n)}%<td>${r.e}</tr>`).join("");
  }else{
   const L=D.items.filter(i=>tab=="idx"?i.kind!="stock":i.kind=="stock").filter(i=>(!early||i.early)&&(!mk||i.market==mk)).sort((a,b)=>(b.early-a.early)||(a.stage-b.stage==0?a.wks-b.wks:(a.stage==2?-1:1)));
