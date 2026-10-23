@@ -1,0 +1,53 @@
+<!doctype html><html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Stage Analysis 대시보드</title>
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+:root{--bg:#fff;--fg:#1a1a1a;--mu:#777;--bd:#e3e3e3;--cd:#f6f6f6}
+@media(prefers-color-scheme:dark){:root{--bg:#16181c;--fg:#e8e8e8;--mu:#999;--bd:#2c2f35;--cd:#20242a}}
+body{margin:0;font:14px -apple-system,Segoe UI,sans-serif;background:var(--bg);color:var(--fg)}
+header{padding:12px 14px;border-bottom:1px solid var(--bd)}h1{font-size:17px;margin:0}small{color:var(--mu)}
+nav,.f{display:flex;gap:6px;padding:8px 14px;flex-wrap:wrap;align-items:center}
+button,select{background:var(--cd);color:var(--fg);border:1px solid var(--bd);border-radius:6px;padding:6px 10px}button.on{background:#2962ff;color:#fff}
+.w{overflow-x:auto;padding:0 14px}table{border-collapse:collapse;width:100%;min-width:560px}th,td{padding:7px 8px;border-bottom:1px solid var(--bd);text-align:right;white-space:nowrap}
+th:first-child,td:first-child{text-align:left}tr.r{cursor:pointer}tr.r:hover{background:var(--cd)}
+.s{padding:2px 8px;border-radius:10px;color:#fff;font-weight:600}.s1{background:#8a8a8a}.s2{background:#1e9e5a}.s3{background:#d99a00}.s4{background:#d6403f}
+.e{color:#1e9e5a;font-weight:700}#m{display:none;position:fixed;inset:0;background:var(--bg);z-index:9;overflow:auto}#ch{height:min(60vh,520px);margin:0 10px}
+</style></head><body>
+<header><h1>Stage Analysis 대시보드</h1><small id="up"></small></header>
+<nav id="tabs"></nav><div class="f" id="fl"></div><div class="w"><table id="t"></table></div>
+<div id="m"><div class="f"><button id="x">← 닫기</button><b id="mt"></b><button id="bd">일봉</button><button id="bw" class="on">주봉</button></div><div id="ch"></div></div>
+<script>
+let D,tab="idx",early=false,mk="";const $=i=>document.getElementById(i);
+const SN={1:"Stage 1",2:"Stage 2",3:"Stage 3",4:"Stage 4"};
+const badge=r=>`<span class="s s${r.stage}">${SN[r.stage]}</span>${r.early?' <span class="e">★초기</span>':''}`;
+fetch("data.json").then(r=>r.json()).then(d=>{D=d;$("up").textContent="갱신: "+d.updated+(d.mock?" · 테스트(가짜) 데이터":"");render()});
+function render(){
+ $("tabs").innerHTML=[["idx","① 국가지수·원자재"],["sec","② 업종"],["stk","③ 종목"]].map(([k,n])=>`<button class="${tab==k?"on":""}" onclick="tab='${k}';render()">${n}</button>`).join("");
+ const mks=[...new Set(D.items.filter(i=>i.kind=="stock").map(i=>i.market))];
+ $("fl").innerHTML=`<label><input type="checkbox" ${early?"checked":""} onchange="early=this.checked;render()"> Stage 2 초기만</label>`+(tab!="idx"?`<select onchange="mk=this.value;render()"><option value="">전체 시장</option>${mks.map(m=>`<option ${m==mk?"selected":""}>${m}</option>`).join("")}</select>`:"");
+ let h="";
+ if(tab=="sec"){
+  const g={};D.items.filter(i=>i.kind=="stock"&&(!mk||i.market==mk)).forEach(i=>{const k=i.market+"|"+i.sector;(g[k]=g[k]||[]).push(i)});
+  const rows=Object.entries(g).map(([k,a])=>({k,n:a.length,s2:a.filter(x=>x.stage==2).length,e:a.filter(x=>x.early).length})).sort((a,b)=>b.s2/b.n-a.s2/a.n);
+  h="<tr><th>시장 · 업종<th>종목수<th>Stage2 비중<th>초기 종목</tr>"+rows.filter(r=>!early||r.e).map(r=>`<tr><td>${r.k.replace("|"," · ")}<td>${r.n}<td>${Math.round(100*r.s2/r.n)}%<td>${r.e}</tr>`).join("");
+ }else{
+  const L=D.items.filter(i=>tab=="idx"?i.kind!="stock":i.kind=="stock").filter(i=>(!early||i.early)&&(!mk||i.market==mk)).sort((a,b)=>(b.early-a.early)||(a.stage-b.stage==0?a.wks-b.wks:(a.stage==2?-1:1)));
+  h="<tr><th>이름<th>Stage<th>30주선 위(주)<th>이격%<th>기울기%<th>RS<th>거래량배</tr>"+L.map(i=>`<tr class="r" onclick="show('${i.id}','${i.name}')"><td>${i.name}${i.sector?` <small>${i.sector}</small>`:""}<td>${badge(i)}<td>${i.wks}<td>${i.ext}<td>${i.slope}<td>${i.rs==null?"-":i.rs?"▲":"▽"}<td>${i.vr}</tr>`).join("");
+ }
+ $("t").innerHTML=h||"<tr><td>해당 항목 없음</tr>";
+}
+let C,P,per="w",cur;
+async function show(id,name){cur=await fetch("d/"+id+".json").then(r=>r.json());$("mt").textContent=name;$("m").style.display="block";draw()}
+function draw(){
+ $("bd").className=per=="d"?"on":"";$("bw").className=per=="w"?"on":"";$("ch").innerHTML="";
+ const dark=matchMedia("(prefers-color-scheme:dark)").matches;
+ C=LightweightCharts.createChart($("ch"),{autoSize:true,layout:{background:{color:"transparent"},textColor:dark?"#ccc":"#333"},grid:{vertLines:{color:dark?"#2a2d33":"#eee"},horzLines:{color:dark?"#2a2d33":"#eee"}}});
+ const a=cur[per],n=per=="w"?30:150;
+ const cs=C.addCandlestickSeries({upColor:"#d6403f",downColor:"#2962ff",borderVisible:false,wickUpColor:"#d6403f",wickDownColor:"#2962ff"});cs.setData(a);
+ const ma=[];for(let i=n-1;i<a.length;i++){let s=0;for(let j=i-n+1;j<=i;j++)s+=a[j].close;ma.push({time:a[i].time,value:s/n})}
+ C.addLineSeries({color:"#ff9800",lineWidth:2,priceLineVisible:false,title:n+(per=="w"?"주선":"일선")}).setData(ma);
+ const v=C.addHistogramSeries({priceScaleId:"v",color:"#99999966",priceFormat:{type:"volume"}});C.priceScale("v").applyOptions({scaleMargins:{top:.8,bottom:0}});
+ v.setData(a.map(x=>({time:x.time,value:x.volume})));C.timeScale().fitContent();
+}
+$("x").onclick=()=>{$("m").style.display="none"};$("bd").onclick=()=>{per="d";draw()};$("bw").onclick=()=>{per="w";draw()};
+</script></body></html>
